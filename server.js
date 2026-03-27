@@ -2,24 +2,14 @@ const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
-const path = require('path');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
 app.post('/create-video', upload.any(), (req, res) => {
   try {
-    if (!req.files || req.files.length === 0) {
-      return res.status(400).send('No files received');
-    }
-
     const files = {};
-    req.files.forEach(f => {
-      files[f.fieldname] = f.path;
-    });
-
-    console.log('Received fields:', Object.keys(files));
-    console.log('Received body:', req.body);
+    req.files.forEach(f => { files[f.fieldname] = f.path; });
 
     const image = files['image'];
     const audio = files['audio'];
@@ -28,49 +18,62 @@ app.post('/create-video', upload.any(), (req, res) => {
     const day = req.body.day || 'output';
 
     if (!image || !audio || !finishing || !music) {
-      return res.status(400).send(
-        'Missing files. Received: ' + JSON.stringify(Object.keys(files))
-      );
+      return res.status(400).send('Missing: ' + JSON.stringify(Object.keys(files)));
     }
 
     if (!fs.existsSync('outputs')) fs.mkdirSync('outputs');
+
+    // Step 1: Merge prayer + finishing prayer
+    const mergedAudio = `outputs/${day}_merged.mp3`;
     const outputPath = `outputs/${day}_video.mp4`;
 
     ffmpeg()
-      .input(image).inputOptions(['-loop 1'])
       .input(audio)
       .input(finishing)
-      .input(music)
-      .complexFilter([
-        '[1][2]concat=n=2:v=0:a=1[prayer]',
-        '[prayer][3]amix=inputs=2:weights=1 0.3[audio]',
-        '[0][audio]'
-      ])
-      .outputOptions([
-        '-c:v libx264',
-        '-tune stillimage',
-        '-c:a aac',
-        '-b:a 192k',
-        '-shortest',
-        '-pix_fmt yuv420p'
-      ])
-      .output(outputPath)
+      .complexFilter('[0:a][1:a]concat=n=2:v=0:a=1[aout]')
+      .outputOptions(['-map [aout]'])
+      .output(mergedAudio)
       .on('end', () => {
-        res.download(outputPath, () => {
-          req.files.forEach(f => {
-            if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-          });
-          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-        });
+        // Step 2: Add background music + image
+        ffmpeg()
+          .input(image)
+          .inputOptions(['-loop 1'])
+          .input(mergedAudio)
+          .input(music)
+          .complexFilter([
+            '[1:a][2:a]amix=inputs=2:weights=1 0.3[aout]'
+          ])
+          .outputOptions([
+            '-map 0:v',
+            '-map [aout]',
+            '-c:v libx264',
+            '-tune stillimage',
+            '-c:a aac',
+            '-b:a 192k',
+            '-shortest',
+            '-pix_fmt yuv420p'
+          ])
+          .output(outputPath)
+          .on('end', () => {
+            res.download(outputPath, () => {
+              req.files.forEach(f => {
+                if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+              });
+              if (fs.existsSync(mergedAudio)) fs.unlinkSync(mergedAudio);
+              if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
+            });
+          })
+          .on('error', (err) => {
+            res.status(500).send('FFmpeg Error step 2: ' + err.message);
+          })
+          .run();
       })
       .on('error', (err) => {
-        console.error('FFmpeg error:', err.message);
-        res.status(500).send('FFmpeg Error: ' + err.message);
+        res.status(500).send('FFmpeg Error step 1: ' + err.message);
       })
       .run();
 
   } catch (err) {
-    console.error('Server error:', err.message);
     res.status(500).send('Server Error: ' + err.message);
   }
 });
