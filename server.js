@@ -2,23 +2,39 @@ const express = require('express');
 const multer = require('multer');
 const ffmpeg = require('fluent-ffmpeg');
 const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const upload = multer({ dest: 'uploads/' });
 
-app.post('/create-video', upload.any(), async (req, res) => {
+app.post('/create-video', upload.any(), (req, res) => {
   try {
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).send('No files received');
+    }
+
     const files = {};
-    req.files.forEach(f => { files[f.fieldname] = f.path; });
+    req.files.forEach(f => {
+      files[f.fieldname] = f.path;
+    });
+
+    console.log('Received fields:', Object.keys(files));
+    console.log('Received body:', req.body);
 
     const image = files['image'];
     const audio = files['audio'];
     const finishing = files['finishing'];
     const music = files['music'];
     const day = req.body.day || 'output';
-    const outputPath = `outputs/${day}_video.mp4`;
+
+    if (!image || !audio || !finishing || !music) {
+      return res.status(400).send(
+        'Missing files. Received: ' + JSON.stringify(Object.keys(files))
+      );
+    }
 
     if (!fs.existsSync('outputs')) fs.mkdirSync('outputs');
+    const outputPath = `outputs/${day}_video.mp4`;
 
     ffmpeg()
       .input(image).inputOptions(['-loop 1'])
@@ -41,18 +57,21 @@ app.post('/create-video', upload.any(), async (req, res) => {
       .output(outputPath)
       .on('end', () => {
         res.download(outputPath, () => {
-          req.files.forEach(f => fs.unlinkSync(f.path));
-          fs.unlinkSync(outputPath);
+          req.files.forEach(f => {
+            if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+          });
+          if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
         });
       })
       .on('error', (err) => {
-        console.error(err);
-        res.status(500).send('Error: ' + err.message);
+        console.error('FFmpeg error:', err.message);
+        res.status(500).send('FFmpeg Error: ' + err.message);
       })
       .run();
-  } catch(err) {
-    console.error(err);
-    res.status(500).send('Error: ' + err.message);
+
+  } catch (err) {
+    console.error('Server error:', err.message);
+    res.status(500).send('Server Error: ' + err.message);
   }
 });
 
