@@ -14,19 +14,18 @@ app.post('/create-video', upload.any(), (req, res) => {
     const image = files['image'];
     const audio = files['audio'];
     const finishing = files['finishing'];
-    const music = files['music'];
     const day = req.body.day || 'output';
 
-    if (!image || !audio || !finishing || !music) {
+    if (!image || !audio || !finishing) {
       return res.status(400).send('Missing: ' + JSON.stringify(Object.keys(files)));
     }
 
     if (!fs.existsSync('outputs')) fs.mkdirSync('outputs');
 
-    // Step 1: Merge prayer + finishing prayer
     const mergedAudio = `outputs/${day}_merged.mp3`;
     const outputPath = `outputs/${day}_video.mp4`;
 
+    // Step 1: Merge prayer + finishing prayer only
     ffmpeg()
       .input(audio)
       .input(finishing)
@@ -34,24 +33,20 @@ app.post('/create-video', upload.any(), (req, res) => {
       .outputOptions(['-map [aout]'])
       .output(mergedAudio)
       .on('end', () => {
-        // Step 2: Add background music + image
+
+        // Step 2: Image + merged audio = video
         ffmpeg()
           .input(image)
           .inputOptions(['-loop 1'])
           .input(mergedAudio)
-          .input(music)
-          .complexFilter([
-            '[1:a][2:a]amix=inputs=2:weights=1 0.3[aout]'
-          ])
           .outputOptions([
-            '-map 0:v',
-            '-map [aout]',
             '-c:v libx264',
             '-tune stillimage',
             '-c:a aac',
-            '-b:a 192k',
+            '-b:a 128k',
             '-shortest',
-            '-pix_fmt yuv420p'
+            '-pix_fmt yuv420p',
+            '-vf scale=1280:720'
           ])
           .output(outputPath)
           .on('end', () => {
@@ -64,12 +59,12 @@ app.post('/create-video', upload.any(), (req, res) => {
             });
           })
           .on('error', (err) => {
-            res.status(500).send('FFmpeg Error step 2: ' + err.message);
+            res.status(500).send('Step2 Error: ' + err.message);
           })
           .run();
       })
       .on('error', (err) => {
-        res.status(500).send('FFmpeg Error step 1: ' + err.message);
+        res.status(500).send('Step1 Error: ' + err.message);
       })
       .run();
 
